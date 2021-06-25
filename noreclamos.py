@@ -6,7 +6,7 @@ import csv
 
 
 def drop_columnas_no_consumo(consumo_historico):
-    consumo_historico.drop(labels=['periodo-fraude','fraude'], inplace=True)
+    consumo_historico.drop(labels=['periodo-fraude','fraude','AGUSCODPOS'], inplace=True)
     return consumo_historico
 
 def get_ultimo_periodo_loc(historico, periodo_fraude, is_fraude):
@@ -62,7 +62,7 @@ def coefficient_of_variation (consumo_historico:pd.Series,is_fraude,periodo_frau
         return None,None,None
 
 
-def correlation_with_population (consumo_historico:pd.Series, population_average:pd.Series, is_fraude, periodo_fraude:int=None, cantidad_periodos:int=12):
+def correlation_with_population (consumo_historico:pd.Series, population_average, periodo_fraude=None, cantidad_periodos=6, categoria='RES'):
     """
     Retorna la relacion entre la varianza y la media de los ultimos cantidad_periodos
     :param consumo_historico
@@ -71,14 +71,28 @@ def correlation_with_population (consumo_historico:pd.Series, population_average
     :return:
     """
     try:
+        is_fraude = ~np.isnan(periodo_fraude)
+        if categoria == 'RES':
+            localidad_average = population_average.loc[int(consumo_historico['AGUSCODPOS'])]
+        else:
+            localidad_average = population_average
         consumo_historico = drop_columnas_no_consumo(consumo_historico)
         ultimo_periodo_loc= get_ultimo_periodo_loc(consumo_historico, periodo_fraude,is_fraude)
         ultimos_periodos = consumo_historico[ultimo_periodo_loc + 1 - cantidad_periodos:ultimo_periodo_loc + 1]
-        population_average = population_average[ultimo_periodo_loc + 1 - cantidad_periodos:ultimo_periodo_loc + 1]
-        correlation = ultimos_periodos.corr(population_average, method='pearson')
+        localidad_average_periodo = localidad_average[ultimo_periodo_loc + 1 - cantidad_periodos:ultimo_periodo_loc + 1]
+        correlation = ultimos_periodos.corr(localidad_average_periodo, method='pearson')
         return correlation
     except Exception as e:
         print(e)
+
+def add_correlacion_cp(consumos: pd.DataFrame, categoria):
+    if categoria == 'RES':
+        population_mean = consumos.groupby(['AGUSCODPOS']).mean()
+    else:
+        population_mean = consumos.mean()
+    consumos['correlacion-con-promedio6'] = consumos.apply(lambda row: correlation_with_population(row, population_mean, row['periodo-fraude'], 6, categoria), axis=1)
+    #result['correlacion-con-promedio3'] = result.apply(lambda row: correlation_with_population(row, population_mean, row['periodo-fraude'], 3), axis=1)
+    return consumos
 
 def avg_demora_pago (pagos_historico:pd.Series,is_fraude, periodo_fraude:int=None, cantidad_periodos:int=6):
     """
@@ -97,33 +111,34 @@ def avg_demora_pago (pagos_historico:pd.Series,is_fraude, periodo_fraude:int=Non
     except Exception as e:
         print(e)
 
-def generate_consumos(consumos_csv, fraudes, merge_type:str='inner'):
-    consumos = consumos_csv.pivot(index='cuenta', columns='periodo', values='consumo')
+def generate_variables_consumos(consumos, fraudes, merge_type:str= 'inner'):
     if fraudes is not None:
         consumos = consumos.merge(fraudes, left_index=True, right_index=True, how=merge_type)
         consumos['fraude'] = np.where(np.isnan(consumos['periodo-fraude']), 0, 1)
     else:
         consumos['fraude'] = np.nan
         consumos['periodo-fraude'] = np.nan
+    result = consumos.copy()
     ##Dont Uncomment consumos['cambio-consumo1-1'] = consumos.apply(lambda row: cambio_consumo(row, row['periodo-fraude'], 1, 1), axis=1)
-    consumos['cambio-consumo1-6'] = consumos.apply(lambda row: cambio_consumo(row,row['fraude'], row['periodo-fraude'], 1, 6), axis=1)
+    result['cambio-consumo1-6'] = consumos.apply(lambda row: cambio_consumo(row,row['fraude'], row['periodo-fraude'], 6, 1), axis=1)
     ##consumos['cambio-consumo3'] = consumos.apply(lambda row: cambio_consumo(row,row['fraude'], row['periodo-fraude'], 3), axis=1)
-    consumos['cambio-consumo6'] = consumos.apply(lambda row: cambio_consumo(row,row['fraude'], row['periodo-fraude'], 6), axis=1)
-    try:
-        ##consumos['std12'], consumos['mean12'], consumos['coeficiente-variacion12'] = consumos.apply(lambda row: coefficient_of_variation(row,row['fraude'], row['periodo-fraude']), axis=1, result_type='expand').T.values
-        consumos['std6'], consumos['mean6'], consumos['coeficiente-variacion6'] = consumos.apply(
-            lambda row: coefficient_of_variation(row, row['fraude'],row['periodo-fraude'], 6), axis=1, result_type='expand').T.values
-        consumos['std3'], consumos['mean3'], consumos['coeficiente-variacion3'] = consumos.apply(
-            lambda row: coefficient_of_variation(row,row['fraude'], row['periodo-fraude'], 3), axis=1, result_type='expand').T.values
-    except Exception as e :
-        print(e)
-    population_mean = consumos.mean(axis=0)
-    consumos.to_csv(data_path + 'consumos-training.csv', encoding='Windows-1252', quoting=csv.QUOTE_NONNUMERIC)
-    # consumos['correlacion-con-promedio']=consumos.apply(lambda row:correlation_with_population(row, population_mean, row['periodo-fraude']), axis=1)
-    consumos = consumos.loc[:, 'cambio-consumo1-6':]
-    return consumos
+    result['cambio-consumo3-6'] = consumos.apply(lambda row: cambio_consumo(row,row['fraude'], row['periodo-fraude'], 6,3), axis=1)
+    result['cambio-consumo6-6'] = consumos.apply(lambda row: cambio_consumo(row, row['fraude'], row['periodo-fraude'], 6, 6), axis=1)
+    ##consumos['std12'], consumos['mean12'], consumos['coeficiente-variacion12'] = consumos.apply(lambda row: coefficient_of_variation(row,row['fraude'], row['periodo-fraude']), axis=1, result_type='expand').T.values
+    result['std6'], result['mean6'], result['coeficiente-variacion6'] = consumos.apply(
+        lambda row: coefficient_of_variation(row, row['fraude'],row['periodo-fraude'], 6), axis=1, result_type='expand').T.values
+    result['std3'], result['mean3'], result['coeficiente-variacion3'] = consumos.apply(
+        lambda row: coefficient_of_variation(row,row['fraude'], row['periodo-fraude'], 3), axis=1, result_type='expand').T.values
+    result['std12'], result['mean12'], result['coeficiente-variacion12'] = consumos.apply(
+        lambda row: coefficient_of_variation(row, row['fraude'], row['periodo-fraude'], 3), axis=1,result_type='expand').T.values
+    consumos = add_correlacion_cp(consumos,categoria)
+    result['correlacion-con-promedio6'] = consumos['correlacion-con-promedio6']
+    #result['correlacion-con-promedio3'] = consumos['correlacion-con-promedio3']
+    result.to_csv(data_path + 'consumos-training.csv', encoding='Windows-1252', quoting=csv.QUOTE_NONNUMERIC)
+    result = result.loc[:, 'cambio-consumo1-6':]
+    return result
 
-def generate_pagos(pagos, fraudes,merge_type:str='inner'):
+def generate_variables_pagos(pagos, fraudes, merge_type:str= 'inner'):
     pagos = pagos.pivot(index='cuenta', columns='periodo', values='demora')
     pagos = pagos.merge(fraudes, left_index=True, right_index=True, how=merge_type)
     pagos['promedio-demora-pago'] = pagos.apply(lambda row: avg_demora_pago(row,row['fraude'], row['periodo-fraude']), axis=1)
@@ -132,16 +147,18 @@ def generate_pagos(pagos, fraudes,merge_type:str='inner'):
     pagos = pagos.loc[:, 'promedio-demora-pago':]
     return pagos
 
-def merge_all(consumos, pagos, fraudes, ipf, output_file, for_scoring:False):
+def merge_all(consumos, pagos, fraudes, ipf, periodos, output_file, for_scoring:False):
     training_data=consumos
-    #training_data = consumos.merge(pagos, left_index=True, right_index=True, how='left')
     if fraudes is not None:
         training_data = training_data.merge(fraudes, left_index=True, right_index=True, how='left')
         training_data['fraude'] = np.where(np.isnan(training_data['periodo-fraude']), 0, 1)
         del training_data['periodo-fraude']
-    #training_data = training_data.merge(ipf, left_index=True, right_index=True, how='left')
-    # training_data['fraude'] = np.where(np.isnan(training_data['periodo-fraude']), 0, 1)
+    if ipf is not None:
+        training_data = training_data.merge(ipf, left_index=True, right_index=True, how='left')
+    #training_data['fraude'] = np.where(np.isnan(training_data['periodo-fraude']), 0, 1)
     training_data.dropna(inplace=True)
+    training_data = training_data[~training_data.index.duplicated(keep='first')]
+    #training_data = training_data.merge(periodos, left_index=True, right_index=True, how='left')
     training_data.index = training_data.index.map(str)
     training_data.index = training_data.index.map(lambda i: 'C-' + i)
     training_data.to_csv(data_path + output_file, encoding='Windows-1252', quoting=csv.QUOTE_NONNUMERIC)
@@ -149,54 +166,67 @@ def merge_all(consumos, pagos, fraudes, ipf, output_file, for_scoring:False):
 def get_periodos(consumo_historico:pd.Series,  periodo_fraude:int=None,cantidad_periodos:int=6):
     try:
         consumo_historico.drop(labels=['periodo-fraude'], inplace=True)
-        ultimo_periodo_loc= get_ultimo_periodo_loc(consumo_historico, periodo_fraude, True)
+        ultimo_periodo_loc= get_ultimo_periodo_loc(consumo_historico, periodo_fraude, ~np.isnan(periodo_fraude))
         ultimos_periodos = consumo_historico[ultimo_periodo_loc + 1 - cantidad_periodos:ultimo_periodo_loc + 1]
-        if ultimos_periodos.size == 6:
-            ultimos_periodos.index = [1,2,3,4,5,6]
+        if ultimos_periodos.size == cantidad_periodos:
+            ultimos_periodos.index = list(range(1, cantidad_periodos+1))
             return ultimos_periodos
         else:
-            return pd.Series([np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
+            return pd.Series(list(range(1, cantidad_periodos)))
     except Exception as e:
-        return pd.Series([np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
+        return pd.Series(list(range(1, cantidad_periodos)))
 
-def generate_periodos(consumos:pd.Series, f):
+def generate_periodos(consumos_csv:pd.Series, fraudes):
     consumos = consumos_csv.pivot(index='cuenta', columns='periodo', values='consumo')
-    consumos = consumos.merge(f, left_index=True, right_index=True, how='left')
-    consumos = consumos.drop(consumos[np.isnan(consumos['periodo-fraude'])].index)
+    consumos = consumos.merge(fraudes, left_index=True, right_index=True, how='left')
+    #consumos = consumos.drop(consumos[np.isnan(consumos['periodo-fraude'])].index)
     rows_list = []
     for index, c in consumos.iterrows():
-        periodo = get_periodos(c, c['periodo-fraude'], 6)
+        periodo = get_periodos(c, c['periodo-fraude'], 12)
         rows_list.append(periodo)
     periodos = pd.concat(rows_list, axis=1)
     periodos = periodos.transpose()
     #consumos.apply(lambda row: get_periodos(row, row['periodo-fraude'], 6), axis=1, result_type='expand')
     periodos.to_csv(data_path + 'periodos.csv', encoding='Windows-1252', quoting=csv.QUOTE_NONNUMERIC)
+    return periodos
 
 
-#periodo_base = 20121
+categoria = 'RES'
 data_path:str = 'C:/work/mooving/Predictive Analytics/NTL/noreclamos/'
 # Read  Data
 fraudes = pd.read_csv(data_path+'fraude.csv')
 fraudes.set_index('cuenta',inplace=True)
-#ipf = pd.read_csv(data_path + 'ipf.csv')
-#ipf = ipf.replace(np.nan, '', regex=True)
-#ipf.set_index('cuenta', inplace=True)
+
+
+ipf = pd.read_csv(data_path + 'ipf.csv')
+ipf = ipf.replace(np.nan, '', regex=True)
+ipf.set_index('cuenta', inplace=True)
+#ipf = ipf[['categoria','AGUSCODPOS']]
 
 consumos_fraude = pd.read_csv(data_path + 'consumo_fraude.csv')
 consumos_nofraude = pd.read_csv(data_path + 'consumo_nofraude.csv')
 consumos_csv = pd.concat([consumos_fraude,consumos_nofraude])
-#generate_periodos(consumos_fraude,fraudes)
-consumos = generate_consumos(consumos_csv,fraudes,'left')
-##pagos_csv = pd.read_csv(data_path + 'pagos.csv')
-##pagos = generate_pagos(pagos_csv,fraudes)
-merge_all(consumos, None, fraudes, None, 'training.csv', False)
+consumos_csv = consumos_csv.pivot(index='cuenta', columns='periodo', values='consumo')
+cat_cp = ipf[['categoria','AGUSCODPOS']]
+consumos_csv = training_data = consumos_csv.merge(cat_cp, left_index=True, right_index=True, how='left')
+consumos_csv = consumos_csv.loc[consumos_csv['categoria'] == categoria]
+del consumos_csv['categoria']
+#periodos = generate_periodos(consumos_csv,fraudes)
+consumos = generate_variables_consumos(consumos_csv, fraudes, 'left')
+#pagos_csv = pd.read_csv(data_path + 'pagos.csv')
+#pagos = generate_variables_pagos(pagos_csv,fraudes)
+merge_all(consumos, None, fraudes, ipf, None, 'training'+categoria+'.csv', False)
+'''
 
-#consumos_scoring_csv = pd.read_csv(data_path + 'consumo_scoring.csv')
-#consumos_scoring = generate_consumos(consumos_scoring_csv,None,'left')
+consumos_scoring_csv = pd.read_csv(data_path + 'consumo_scoring.csv')
+consumos_scoring = generate_variables_consumos(consumos_scoring_csv,None,'left')
+ipf = pd.read_csv(data_path + 'ipf_scoring.csv')
+ipf = ipf.replace(np.nan, '', regex=True)
+ipf.set_index('cuenta', inplace=True)
 ##pagos_scoring_csv = pd.read_csv(data_path + 'pagos_scoring.csv')
 ##pagos_scoring = generate_pagos(pagos_scoring_csv,fraudes,'left')
-#merge_all(consumos_scoring, None, None, None, 'scoring_data.csv', True)
-
+merge_all(consumos_scoring, None, None, ipf, None, 'scoring_data.csv', True)
+'''
 print('Process Finished')
 
 
